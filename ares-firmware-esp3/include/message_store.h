@@ -32,6 +32,10 @@ AresStoredMessage *storeGet(int handle);
 void storeMarkDone(int handle);
 // Devolve à fila para tentar de novo só a partir de untilMs
 void storeDefer(int handle, uint32_t untilMs);
+// Igual ao storeDefer, mas sem contar rodada sem confirmação (ex.: ainda não há rota)
+void storeWait(int handle, uint32_t untilMs);
+// Descarta (e registra no log) as mensagens guardadas há mais de maxAgeMs. Retorna quantas saíram.
+int storeExpireOld(uint32_t now, uint32_t maxAgeMs);
 int storeFreeSlots();
 int storeUsedSlots();
 void storePrint(uint32_t now);

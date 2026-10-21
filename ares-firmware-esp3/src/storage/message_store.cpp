@@ -110,6 +110,31 @@ void storeDefer(int handle, uint32_t untilMs) {
     m->inFlight = false;
 }
 
+void storeWait(int handle, uint32_t untilMs) {
+    AresStoredMessage *m = storeGet(handle);
+    if (m == nullptr) return;
+    m->notBeforeMs = untilMs;
+    m->attempts = 0;
+    m->inFlight = false;
+}
+
+int storeExpireOld(uint32_t now, uint32_t maxAgeMs) {
+    int removed = 0;
+    for (int i = 0; i < STORE_SLOTS; i++) {
+        AresStoredMessage *m = &slots[i];
+        if (!m->used || m->inFlight || (now - m->storedAtMs) < maxAgeMs) continue;
+        // Nada sai da fila em silêncio (RS-04): toda expiração fica no log
+        if (storeDebugEnabled) {
+            Serial.printf("[DROP] %.*s P%d: expirou depois de %lu s guardada sem entrega\n",
+                          (int) sizeof(m->packet.header.msg_id), m->packet.header.msg_id,
+                          priorityOf(m), (unsigned long) ((now - m->storedAtMs) / 1000));
+        }
+        m->used = false;
+        removed++;
+    }
+    return removed;
+}
+
 int storeFreeSlots() {
     int count = 0;
     for (int i = 0; i < STORE_SLOTS; i++) {

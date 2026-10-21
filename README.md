@@ -24,7 +24,7 @@ Sistema de comunicação e telemetria resiliente baseado em nós ESP32, combinan
 
 1. **ESP1 (Nó Emissor)**: Gera dados de telemetria (bateria, armazenamento), localização (latitude, longitude, altura) e mensagens em uma estrutura binária (`AresMessagePacket`) e despacha periodicamente via rádio ESP-NOW.
 2. **ESP2 (Nó Gateway)**: Escuta pacotes ESP-NOW na placa de rede, armazena em buffer seguro, converte em JSON estruturado e despacha via requisição HTTP POST para o servidor Ingress.
-3. **ESP3 (Nó Router, opcional)**: Fica entre o ESP1 e o ESP2 para aumentar o alcance. Recebe o `AresMessagePacket`, descarta duplicatas, guarda numa fila por prioridade (P0 primeiro) e repassa o pacote ao ESP2, guardando-o enquanto o ESP2 não confirmar. Detalhes em [`ares-firmware-esp3/README.md`](ares-firmware-esp3/README.md).
+3. **ESP3 (Nó Router, opcional)**: Fica entre o ESP1 e o ESP2 para aumentar o alcance; vários ESP3 formam uma rede de vários saltos. Descobre os vizinhos por beacons, calcula a rota até o ESP2 e a refaz quando um vizinho some, descarta duplicatas, guarda numa fila por prioridade (P0 primeiro) e repassa o `AresMessagePacket` sem alteração, guardando-o enquanto o próximo salto não confirmar. Detalhes em [`ares-firmware-esp3/README.md`](ares-firmware-esp3/README.md).
 4. **Ingress Handler (Python)**: Servidor HTTP rodando na máquina host/servidor que consome e exibe os pacotes JSON recebidos do Gateway.
 
 ---
@@ -60,13 +60,19 @@ ares/
 │   │   ├── ares_config.h       # Canal, reenvio, tamanho da fila e debug
 │   │   ├── ares_credentials.h  # MAC Address do ESP2 (próximo salto)
 │   │   ├── ares_protocol.h     # Definição das structs de pacote
+│   │   ├── ares_router_protocol.h # Beacon e ACK de custódia entre Routers
 │   │   ├── dedup_cache.h       # Mensagens já vistas
 │   │   ├── esp_now_router.h    # Interface do rádio
-│   │   └── message_store.h     # Fila P0-P4
+│   │   ├── message_store.h     # Fila P0-P4
+│   │   ├── neighbor_table.h    # Tabela de vizinhos
+│   │   └── routing.h           # Distância até o Gateway e próximo salto
 │   ├── src/
-│   │   ├── main.cpp            # Recepção, fila e envio com confirmação
+│   │   ├── main.cpp            # Recepção, beacons, envio com custódia e comandos
 │   │   ├── radio/
 │   │   │   └── esp_now_router.cpp # Callbacks e envio ESP-NOW
+│   │   ├── routing/
+│   │   │   ├── neighbor_table.cpp # Vizinhos e expiração
+│   │   │   └── routing.cpp     # Gradiente de saltos até o Gateway
 │   │   └── storage/
 │   │       ├── dedup_cache.cpp # Buffer circular de IDs
 │   │       └── message_store.cpp # Fila em RAM por prioridade
