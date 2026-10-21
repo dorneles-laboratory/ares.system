@@ -34,6 +34,8 @@
 #define CUSTODY_TIMEOUT_MS 500         // Espera máxima pelo ACK de custódia de outro Router
 #define MAX_TX_ATTEMPTS 3              // Tentativas seguidas antes de devolver a mensagem à fila
 #define RETRY_BACKOFF_MS 3000          // Pausa antes de tentar de novo uma mensagem devolvida
+#define GATEWAY_SEND_SPACING_MS 1500   // Intervalo mínimo entre entregas ao ESP2: ele guarda um pacote por vez e
+                                       // descarta o que chega durante o POST, mesmo com o rádio confirmando
 
 // --- MEMÓRIA (tamanhos fixos, sem malloc no loop) ---
 #define STORE_SLOTS 24                 // Mensagens guardadas, somando P0-P4

@@ -67,7 +67,7 @@ O relatório do Router separa três confirmações, e o ESP3 também:
 | Entrega ao destino | Gateway / aplicação | Fica com o ESP2 e o `ingress_handler.py` |
 
 * Para outro Router, a vaga só é liberada com o ACK de custódia (espera de até `CUSTODY_TIMEOUT_MS`). Se o ACK se perder e a mensagem chegar de novo, o Router que já a tem descarta a duplicata e manda o ACK outra vez.
-* Para o ESP2, que não manda ACK de custódia, a vaga é liberada com a confirmação do rádio.
+* Para o ESP2, que não manda ACK de custódia, a vaga é liberada com a confirmação do rádio. Como o ESP2 guarda só um pacote por vez e descarta o que chega enquanto faz o POST, o Router espera `GATEWAY_SEND_SPACING_MS` (1,5 s) entre uma entrega e outra ao ESP2. Assim, ao esvaziar uma fila acumulada, as mensagens não se perdem no ESP2.
 * Sem confirmação depois de `MAX_TX_ATTEMPTS` tentativas, a mensagem espera `RETRY_BACKOFF_MS` e volta para a fila; enquanto isso, a rota pode mudar.
 
 ### Pacotes de controle
@@ -126,6 +126,6 @@ Igual ao ESP1: `FORCE_SOFTWARE_DEBUG true` no `ares_config.h` ou o pino `GPIO 4`
 ## Limitações conhecidas
 
 * A fila fica na RAM e se perde se o Router reiniciar. A interface `store*` (`message_store.h`) é o ponto de encaixe do módulo de Storage em memória não volátil, que é de outra frente da equipe; com ele, a custódia passa a ser confirmada só depois de gravar.
-* O ESP2 não manda beacon nem ACK de custódia: a entrega a ele é confirmada pelo rádio. Se o ESP2 passar a anunciar beacons com `role = ROLE_GATEWAY` e `hopsToGateway = 0`, os Routers já o reconhecem.
+* O ESP2 não manda beacon nem ACK de custódia: a entrega a ele é confirmada pelo rádio. Se o POST demorar mais que `GATEWAY_SEND_SPACING_MS`, ou se dois Routers entregarem ao mesmo tempo, o ESP2 ainda pode descartar um pacote que o rádio confirmou. Resolver de vez depende do ESP2 (uma fila em vez de um único `pendingPacket`, ou um ACK depois do POST). Se o ESP2 passar a anunciar beacons com `role = ROLE_GATEWAY` e `hopsToGateway = 0`, os Routers já o reconhecem.
 * No núcleo 2.x (o do PlatformIO), o RSSI vem do modo promíscuo do Wi-Fi, porque o callback do ESP-NOW não traz o sinal. No núcleo 3.x ele vem do próprio callback.
 * Fora do escopo por enquanto: autenticação das mensagens, LoRa, troca automática de papéis e drones.

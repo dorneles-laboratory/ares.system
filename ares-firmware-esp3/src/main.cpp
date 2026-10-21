@@ -30,6 +30,8 @@ unsigned long txStartedAt = 0;
 bool txRadioDone = false;
 bool txRadioDelivered = false;
 bool txCustodyReceived = false;
+unsigned long lastGatewayDeliveryAt = 0;
+bool gatewayDeliveredOnce = false;
 
 // --- Tarefas periódicas ---
 unsigned long lastBeaconAt = 0;
@@ -288,6 +290,8 @@ static void startAttempt(AresStoredMessage *message, unsigned long now) {
 static void finishDelivered(AresStoredMessage *message) {
     if (txToGateway) {
         forwardedToGatewayCount++;
+        lastGatewayDeliveryAt = millis();
+        gatewayDeliveredOnce = true;
     } else {
         forwardedToRouterCount++;
         neighborMarkSuccess(txNextHop);
@@ -346,6 +350,9 @@ void processOutgoingMessages() {
             storeWait(handle, now + RETRY_BACKOFF_MS);
             return;
         }
+        // O ESP2 só tem espaço para um pacote enquanto faz o POST: entregas em sequência
+        // seriam confirmadas pelo rádio e descartadas por ele, então espaçamos
+        if (txToGateway && gatewayDeliveredOnce && now - lastGatewayDeliveryAt < GATEWAY_SEND_SPACING_MS) return;
 
         txHandle = handle;
         message->inFlight = true;
