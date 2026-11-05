@@ -4,12 +4,14 @@
 #include <stdint.h>
 
 // Roteamento por gradiente de saltos até o Gateway:
-// - quem alcança o ESP2 direto está a 1 salto;
+// - quem alcança o ESP2 direto está a 1 salto (pelo teste de enlace ou pelo beacon do Gateway, 0 saltos);
 // - os outros ficam a 1 + o menor valor entre os vizinhos vivos;
 // - o próximo salto é o vizinho mais perto do Gateway (desempate: RSSI, bateria, vagas).
 
 void routingInit(const uint8_t *gatewayMac, const uint8_t *selfMac);
 const uint8_t *routingGatewayMac();
+// GATEWAY_MAC foi configurado? Sem ele, o Gateway só é achado pelos beacons (ROLE_GATEWAY)
+bool routingGatewayConfigured();
 // O rádio do ESP2 confirmou um envio (dados ou teste de enlace)
 void routingGatewayConfirmed(uint32_t now);
 // Uma rodada inteira de envios ao ESP2 ficou sem confirmação

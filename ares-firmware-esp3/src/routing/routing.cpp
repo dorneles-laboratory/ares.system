@@ -1,6 +1,6 @@
 #include <string.h>
 #include "../../include/ares_config.h"
-#include "../../include/ares_router_protocol.h"
+#include "../../include/ares_control_protocol.h"
 #include "../../include/neighbor_table.h"
 #include "../../include/routing.h"
 
@@ -8,10 +8,17 @@ static uint8_t gatewayAddress[6];
 static uint8_t selfAddress[6];
 static uint32_t gatewayConfirmedAt = 0;
 static bool gatewayEverConfirmed = false;
+static bool gatewayConfigured = false;   // GATEWAY_MAC foi preenchido (não é FF:FF:FF:FF:FF:FF)
 
 void routingInit(const uint8_t *gatewayMac, const uint8_t *selfMac) {
     memcpy(gatewayAddress, gatewayMac, 6);
     memcpy(selfAddress, selfMac, 6);
+    static const uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    gatewayConfigured = memcmp(gatewayMac, broadcast, 6) != 0;
+}
+
+bool routingGatewayConfigured() {
+    return gatewayConfigured;
 }
 
 const uint8_t *routingGatewayMac() {
@@ -28,7 +35,7 @@ void routingGatewayFailed() {
 }
 
 bool routingGatewayAlive(uint32_t now) {
-    return gatewayEverConfirmed && (now - gatewayConfirmedAt) < GATEWAY_ALIVE_MS;
+    return gatewayConfigured && gatewayEverConfirmed && (now - gatewayConfirmedAt) < GATEWAY_ALIVE_MS;
 }
 
 uint32_t routingGatewayLastConfirmed() {
@@ -46,7 +53,9 @@ static int batteryScore(const AresNeighbor *n) {
 
 // O vizinho pode levar mensagens até o Gateway?
 static bool isUsable(const AresNeighbor *n, const uint8_t *excludeMac) {
-    if (n->role != ROLE_ROUTER && n->role != ROLE_GATEWAY) return false;
+    if (n->role != ROLE_ROUTER && n->role != ROLE_GATEWAY) return false;   // Storage não leva ao Gateway
+    // O Gateway é o destino final: pode receber mesmo que a mensagem tenha vindo dele
+    if (n->role == ROLE_GATEWAY) return n->queueFree > 0;
     if (n->hopsToGateway >= MAX_ROUTE_HOPS) return false;
     if (n->queueFree == 0) return false;
     // Split horizon: quem chega ao Gateway passando por nós não serve de caminho para nós
@@ -90,6 +99,7 @@ bool routingChooseNextHop(uint32_t now, const uint8_t *excludeMac, uint8_t outMa
     const AresNeighbor *best = bestNeighbor(excludeMac);
     if (best == nullptr) return false;
     memcpy(outMac, best->mac, 6);
-    *isGateway = false;
+    // O vizinho pode ser o próprio Gateway, descoberto pelo beacon dele (0 saltos)
+    *isGateway = (best->role == ROLE_GATEWAY);
     return true;
 }

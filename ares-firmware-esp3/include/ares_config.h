@@ -9,14 +9,15 @@
     #pragma message("[AVISO ARES CONFIG] 'ares_credentials.h' NAO encontrado. Usando valores PADRAO.")
 #endif
 
-// MAC Address do ESP2 (Gateway). Substitua pelo MAC real no ares_credentials.h.
-// Todos os Routers usam o mesmo: quem alcança o ESP2 entrega direto, os outros vão por vizinhos.
+// MAC Address do ESP2 (Gateway). OPCIONAL: o Gateway novo se anuncia por beacon e o Router
+// o acha sozinho. Com o MAC configurado, o Router também testa o enlace com o ESP2 direto.
 #ifndef GATEWAY_MAC
     #define GATEWAY_MAC {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 #endif
 
 // --- CONFIGURAÇÕES DE RÁDIO ---
-#define ESPNOW_CHANNEL 2               // Mesmo canal fixo do ESP1 (o ESP2 segue o canal do Hotspot)
+#define ESPNOW_CHANNEL 2               // Mesmo canal fixo do Storage (ESP1); o ESP2 segue o canal do Hotspot
+#define RADIO_LOW_TX_POWER false       // true = potência baixa (bancada / problema de brownout na USB)
 
 // --- DESCOBERTA DE VIZINHOS ---
 #define BEACON_INTERVAL_MS 5000        // Cada Router anuncia a si mesmo a cada 5 s (broadcast)
@@ -31,11 +32,9 @@
 
 // --- ENVIO E CUSTÓDIA ---
 #define SEND_CONFIRM_TIMEOUT_MS 300    // Espera máxima pela confirmação do rádio de um envio
-#define CUSTODY_TIMEOUT_MS 500         // Espera máxima pelo ACK de custódia de outro Router
+#define CUSTODY_TIMEOUT_MS 800         // Espera máxima pelo ACK de custódia (Router ou Gateway, que grava na flash antes)
 #define MAX_TX_ATTEMPTS 3              // Tentativas seguidas antes de devolver a mensagem à fila
 #define RETRY_BACKOFF_MS 3000          // Pausa antes de tentar de novo uma mensagem devolvida
-#define GATEWAY_SEND_SPACING_MS 1500   // Intervalo mínimo entre entregas ao ESP2: ele guarda um pacote por vez e
-                                       // descarta o que chega durante o POST, mesmo com o rádio confirmando
 
 // --- MEMÓRIA (tamanhos fixos, sem malloc no loop) ---
 #define STORE_SLOTS 24                 // Mensagens guardadas, somando P0-P4

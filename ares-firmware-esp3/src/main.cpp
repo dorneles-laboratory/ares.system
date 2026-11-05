@@ -1,9 +1,9 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include "ares_protocol.h"
-#include "ares_router_protocol.h"
+#include "ares_control_protocol.h"
 #include "ares_config.h"
-#include "esp_now_router.h"
+#include "esp_now_radio.h"
 #include "message_store.h"
 #include "dedup_cache.h"
 #include "neighbor_table.h"
@@ -30,8 +30,6 @@ unsigned long txStartedAt = 0;
 bool txRadioDone = false;
 bool txRadioDelivered = false;
 bool txCustodyReceived = false;
-unsigned long lastGatewayDeliveryAt = 0;
-bool gatewayDeliveredOnce = false;
 
 // --- Tarefas periódicas ---
 unsigned long lastBeaconAt = 0;
@@ -117,10 +115,11 @@ static void sendCustodyAck(const uint8_t *toMac, const AresHeader *header) {
     }
 }
 
-// Só Routers entendem o ACK de custódia; o ESP1 e o próprio Serial não recebem
+// Storage, Router e Gateway entendem o ACK de custódia. Só não mandamos ACK para nós
+// mesmos (mensagens injetadas pelo Serial). Um nó antigo que não entende o ACK
+// simplesmente o descarta pelo tamanho, então mandar não faz mal.
 static bool expectsCustodyAck(const uint8_t *senderMac) {
-    const AresNeighbor *n = neighborFind(senderMac);
-    return n != nullptr && n->role == ROLE_ROUTER;
+    return !sameMac(senderMac, selfMac);
 }
 
 // ============================================================================
@@ -198,6 +197,7 @@ void handleBeacon(const uint8_t *senderMac, const AresBeaconPacket *beacon, int8
         if (showLogs) {
             Serial.print("[NBR] Novo vizinho: ");
             printMac(senderMac);
+            Serial.print(beacon->role == ROLE_GATEWAY ? " (Gateway)" : beacon->role == ROLE_STORAGE ? " (Storage)" : " (Router)");
             if (beacon->hopsToGateway == HOPS_UNREACHABLE) {
                 Serial.print(" | sem rota até o Gateway");
             } else {
@@ -209,7 +209,8 @@ void handleBeacon(const uint8_t *senderMac, const AresBeaconPacket *beacon, int8
 }
 
 void handleCustodyAck(const uint8_t *senderMac, const AresCustodyAckPacket *ack) {
-    if (txState == TX_IDLE || txToGateway || !sameMac(senderMac, txNextHop)) return;
+    // O ACK precisa ser do vizinho para quem enviamos (Router ou Gateway)
+    if (txState == TX_IDLE || !sameMac(senderMac, txNextHop)) return;
     AresStoredMessage *message = storeGet(txHandle);
     if (message == nullptr) return;
     const AresHeader *header = &message->packet.header;
@@ -290,16 +291,15 @@ static void startAttempt(AresStoredMessage *message, unsigned long now) {
 static void finishDelivered(AresStoredMessage *message) {
     if (txToGateway) {
         forwardedToGatewayCount++;
-        lastGatewayDeliveryAt = millis();
-        gatewayDeliveredOnce = true;
+        routingGatewayConfirmed(millis());
     } else {
         forwardedToRouterCount++;
-        neighborMarkSuccess(txNextHop);
     }
+    neighborMarkSuccess(txNextHop);
     if (showLogs) {
         Serial.print("[ACK] ");
         printMsgId(&message->packet);
-        Serial.print(txToGateway ? " entregue ao Gateway " : " aceita (custódia) pelo Router ");
+        Serial.print(txToGateway ? " aceita (custódia) pelo Gateway " : " aceita (custódia) pelo Router ");
         printMac(txNextHop);
         Serial.printf(" (tentativa %u/%d, rodada %u). Vaga liberada.\n",
                       message->attempts, MAX_TX_ATTEMPTS, message->rounds + 1);
@@ -324,7 +324,9 @@ static void finishRoundFailed(AresStoredMessage *message, unsigned long now) {
     if (txToGateway) {
         routingGatewayFailed();
         if (showLogs) Serial.println("[ROUTE] O Gateway não respondeu. Procurando outro caminho.");
-    } else if (neighborMarkFailure(txNextHop) >= NEIGHBOR_FAIL_ROUNDS) {
+    }
+    // O Gateway também pode estar na tabela de vizinhos (pelos beacons dele)
+    if (neighborFind(txNextHop) != nullptr && neighborMarkFailure(txNextHop) >= NEIGHBOR_FAIL_ROUNDS) {
         neighborRemove(txNextHop);
         removeRadioPeer(txNextHop);
         if (showLogs) {
@@ -350,10 +352,6 @@ void processOutgoingMessages() {
             storeWait(handle, now + RETRY_BACKOFF_MS);
             return;
         }
-        // O ESP2 só tem espaço para um pacote enquanto faz o POST: entregas em sequência
-        // seriam confirmadas pelo rádio e descartadas por ele, então espaçamos
-        if (txToGateway && gatewayDeliveredOnce && now - lastGatewayDeliveryAt < GATEWAY_SEND_SPACING_MS) return;
-
         txHandle = handle;
         message->inFlight = true;
         message->attempts = 0;
@@ -385,12 +383,10 @@ void processOutgoingMessages() {
         if (txRadioDone) {
             if (!txRadioDelivered) {
                 attemptFailed = true;
-            } else if (txToGateway) {
-                // O ESP2 não manda ACK de custódia: a confirmação do rádio é o máximo que ele dá
-                routingGatewayConfirmed(now);
-                finishDelivered(message);
-                return;
             } else {
+                // O rádio do vizinho recebeu. Isso NÃO é custódia: o Router e o Gateway
+                // só mandam o ACK depois de guardar a mensagem. Agora esperamos esse ACK.
+                if (txToGateway) routingGatewayConfirmed(now);
                 txState = TX_WAIT_CUSTODY;
                 txStartedAt = now;
             }
@@ -433,6 +429,7 @@ void sendBeacon(unsigned long now) {
 // Testa o enlace com o ESP2 quando não há dados indo para ele. É um pacote pequeno: o
 // rádio do ESP2 confirma o recebimento e o firmware dele descarta pelo tamanho.
 void probeGateway(unsigned long now) {
+    if (!routingGatewayConfigured()) return;   // Sem GATEWAY_MAC: o Gateway é achado pelos beacons dele
     bool recentlyConfirmed = routingGatewayAlive(now) &&
                              (now - routingGatewayLastConfirmed()) < GATEWAY_ALIVE_MS / 2;
     if (recentlyConfirmed) return;
@@ -528,6 +525,7 @@ void printNeighbors() {
         if (n == nullptr) continue;
         Serial.print("  ");
         printMac(n->mac);
+        Serial.print(n->role == ROLE_GATEWAY ? " | Gateway" : n->role == ROLE_STORAGE ? " | Storage" : " | Router");
         if (n->hopsToGateway == HOPS_UNREACHABLE) {
             Serial.print(" | sem rota");
         } else {
@@ -666,8 +664,14 @@ void setup() {
         Serial.printf("[DEBUG] Tamanho do pacote AresMessagePacket: %u bytes\n", sizeof(AresMessagePacket));
     }
 
-    if (!initEspNowRouter(configuredGatewayMac)) {
+    if (!initEspNowRadio(ESPNOW_CHANNEL)) {
         if (showLogs) Serial.println("Erro crítico na inicialização do rádio.");
+    }
+    if (isBroadcastMac(configuredGatewayMac)) {
+        // Broadcast "sempre dá certo" no rádio: não serve para testar o enlace com o Gateway
+        if (showLogs) Serial.println("[INFO] GATEWAY_MAC não configurado: o Gateway será achado pelos beacons dele.");
+    } else {
+        addRadioPeer(configuredGatewayMac);
     }
     WiFi.macAddress(selfMac);
     routingInit(configuredGatewayMac, selfMac);

@@ -2,7 +2,7 @@
 #define NEIGHBOR_TABLE_H
 
 #include <stdint.h>
-#include "ares_router_protocol.h"
+#include "ares_control_protocol.h"
 
 // Vizinhos descobertos pelos beacons. Tamanho fixo (MAX_NEIGHBORS), sem malloc.
 typedef struct {

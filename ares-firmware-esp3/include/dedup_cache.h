@@ -6,6 +6,7 @@
 // Memória curta das últimas mensagens vistas, para não repassar a mesma duas vezes.
 // A chave é (source_id, msg_id, timestamp): o ESP1 recomeça o contador do msg_id
 // quando reinicia, e o timestamp separa "msg-uuid-1" de antes e depois do reboot.
+// (O Storage novo já gera IDs que não repetem, mas outros nós podem não gerar.)
 bool dedupSeen(const AresHeader *header);
 void dedupRemember(const AresHeader *header);
 
