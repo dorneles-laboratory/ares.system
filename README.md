@@ -1,217 +1,153 @@
 # Projeto ARES (Advanced Resilient Emergency System)
 
-Sistema de comunicação e telemetria resiliente baseado em nós ESP32, combinando transmissão de rádio ponto a ponto via **ESP-NOW** com um nó Gateway conectado via **Wi-Fi** a um **Servidor Ingress HTTP**.
+Rede de mensagens de emergência com ESP32 comuns: as mensagens viajam por rádio **ESP-NOW** de nó em nó até um **Gateway**, que as envia por **Wi-Fi/HTTP** a um servidor. Nenhuma mensagem some em silêncio: cada nó só apaga a sua cópia quando o próximo confirma que ficou com ela (**custódia**).
 
 ---
 
-## 📐 Arquitetura do Sistema
+## 📐 Os 3 ESPs
 
 ```
-+---------------------+                    +---------------------+                    +------------------------+
-|  ESP1 (Emissor)     |                    |  ESP2 (Gateway)     |                    | Servidor Ingress       |
-|                     |                    |                     |                    | (Python Host)          |
-| Coleta Telemetria   |   ESP-NOW (2.4GHz) | Recebe via rádio    |     HTTP POST      |                        |
-| e Localização       | -----------------> | Converte para JSON  | -----------------> | Porta 8080             |
-| Envia pacote binário|                    | Envia via Wi-Fi STA |                    | Exibe dados no terminal|
-+---------------------+                    +---------------------+                    +------------------------+
+ ESP1 STORAGE              ESP3 ROUTER                ESP2 GATEWAY                 Computador
+ cria e GUARDA      ESP-NOW   repassa em direção  ESP-NOW  GUARDA na flash   HTTP    ingress_handler.py
+ na flash (LittleFS) ------> ao Gateway (fila     ------> e faz o POST     ------> (porta 8080)
+ até ter custódia   <------  P0-P4 na RAM)        <------  ao servidor
+                     ACK de custódia               ACK de custódia
 ```
 
-1. **ESP1 (Nó Emissor)**: Gera dados de telemetria (bateria, armazenamento), localização (latitude, longitude, altura) e mensagens em uma estrutura binária (`AresMessagePacket`) e despacha periodicamente via rádio ESP-NOW.
-2. **ESP2 (Nó Gateway)**: Escuta pacotes ESP-NOW na placa de rede, armazena em buffer seguro, converte em JSON estruturado e despacha via requisição HTTP POST para o servidor Ingress.
-3. **Ingress Handler (Python)**: Servidor HTTP rodando na máquina host/servidor que consome e exibe os pacotes JSON recebidos do Gateway.
+| ESP | Papel | Pasta | O que ele guarda |
+|---|---|---|---|
+| ESP1 | **Storage**: cria mensagens (telemetria e texto pelo Serial), aceita mensagens de outros nós e as guarda até entregar | [`ares-firmware-esp1/`](ares-firmware-esp1/README.md) | Até 2.000 mensagens na **flash interna** (LittleFS), sobrevive a queda de energia |
+| ESP3 | **Router**: descobre vizinhos, calcula a rota até o Gateway e repassa | [`ares-firmware-esp3/`](ares-firmware-esp3/README.md) | Fila de 24 mensagens na RAM |
+| ESP2 | **Gateway**: recebe pelo rádio e envia ao servidor por HTTP | [`ares-firmware-esp2/`](ares-firmware-esp2/README.md) | Até 2.000 mensagens na **flash interna**, só enquanto tenta o POST. Sem servidor, não aceita novas |
+
+O Storage também entrega **direto** ao Gateway quando o ouve; o Router só é necessário para aumentar o alcance. Vários Routers formam uma rede de vários saltos.
+
+### Como uma mensagem anda
+
+1. O Storage grava a mensagem na flash e anuncia "estou aqui" (beacon) a cada 5 s. Router e Gateway fazem o mesmo.
+2. O Storage escolhe o vizinho mais perto do Gateway (o próprio Gateway vence) e envia.
+3. Quem recebe **grava primeiro** e só depois manda o **ACK de custódia**. Só então o Storage apaga a dele.
+4. Sem ACK: tenta 3 vezes, espera 3 s e tenta de novo (a rota pode ter mudado).
+5. O Gateway envia ao servidor por HTTP. Só apaga quando o servidor responde 200.
+6. **Sem servidor (Wi-Fi caiu ou servidor fora do ar), o Gateway para de aceitar mensagens novas**: o beacon dele passa a dizer "sem rota" e as mensagens **ficam guardadas no Storage** (e no Router) até a rede voltar. Para mudar isso: `GATEWAY_HOLD_WHEN_OFFLINE` no `ares_config.h` do ESP2.
+
+### Três confirmações diferentes (a wiki pede para não confundir)
+
+| Confirmação | Quem dá | Significa |
+|---|---|---|
+| Rádio | Hardware do vizinho, automático | "O sinal chegou". **Não** é custódia. |
+| Custódia (ACK) | Firmware do Storage/Router/Gateway | "Gravei, a responsabilidade agora é minha" |
+| Entrega | Servidor (HTTP 200) | "Recebi e registrei" |
 
 ---
 
-## 📁 Estrutura de Arquivos
+## 📁 Estrutura
 
 ```text
-ares/
-├── ares-firmware-esp1/         # Firmware do ESP32 Emissor (ESP-NOW TX)
-│   ├── include/
-│   │   ├── ares_config.h       # Constantes de intervalo, pinos e fallback
-│   │   ├── ares_credentials.h  # MAC Address do ESP2 de destino (segredos)
-│   │   └── ares_protocol.h     # Definição das structs de pacote e cabeçalhos
-│   ├── src/
-│   │   ├── main.cpp            # Setup e loop de geração de dados
-│   │   └── radio/
-│   │       └── esp_now_link.cpp# Inicialização e envio ESP-NOW
-│   └── platformio.ini          # Configuração do PlatformIO (esp32dev)
-│
-├── ares-firmware-esp2/         # Firmware do ESP32 Gateway (ESP-NOW RX -> HTTP)
-│   ├── include/
-│   │   ├── ares_config.h       # Constantes do gateway e servidor ingress
-│   │   ├── ares_credentials.h  # Credenciais Wi-Fi e IP do Ingress
-│   │   └── ares_protocol.h     # Definição das structs de pacote
-│   ├── src/
-│   │   ├── main.cpp            # Recepção, serialização JSON e envio HTTP POST
-│   │   └── radio/
-│   │       └── esp_now_rx.cpp  # Callback de recepção ESP-NOW
-│   └── platformio.ini          # Configuração do PlatformIO + ArduinoJson
-│
-├── ingress_handler.py          # Servidor HTTP Ingress principal em Python
-│
-└── tests/
-    ├── test_server.py          # Servidor HTTP simples para teste de bancada
-    └── test-server/            # Firmware ESP32 de teste isolado para envio HTTP
+ares.system/
+├── ares-firmware-esp1/      # ESP1 Storage  (PlatformIO)
+├── ares-firmware-esp2/      # ESP2 Gateway  (PlatformIO + ArduinoJson)
+├── ares-firmware-esp3/      # ESP3 Router   (PlatformIO)
+├── tools/
+│   ├── verificar_protocolo.py      # Confere se os arquivos comuns estão iguais nos 3
+│   └── gerar_sketches_arduino.py   # Gera as versões para o Arduino IDE
+├── ingress_handler.py       # Servidor HTTP que recebe do Gateway
+└── tests/                   # Teste isolado de Wi-Fi/HTTP
 ```
+
+Arquivos **iguais nos três** (mudou em um, copie para os outros e rode `python tools/verificar_protocolo.py`):
+`ares_protocol.h` (mensagem de 156 bytes, mesmos campos do repositório oficial), `ares_control_protocol.h` (beacon e ACK), `esp_now_radio.h/.cpp` (rádio) e `dedup_cache.h/.cpp`. O Storage e o Gateway também compartilham `flash_store`, `event_log` e `node_clock`.
 
 ---
 
 ## 🛠️ Pré-requisitos
 
-### Hardware
-* 2x Placas de desenvolvimento **ESP32** (ex: ESP32-WROOM-32 / ESP32 Dev Module).
-* 2x Cabos de dados Micro-USB ou USB-C.
-* Ponto de acesso Wi-Fi de 2.4 GHz (pode ser o roteador local ou o Hotspot/Ponto de Acesso do celular).
-
-### Software
-* **Python 3.8+** (utiliza bibliotecas nativas `http.server` e `json`, sem necessidade de `pip install`).
-* **VS Code** com a extensão oficial **PlatformIO IDE** (ou a CLI do PlatformIO `pio`).
+* 3 placas **ESP32 comuns** (ESP32-WROOM-32 / "ESP32 Dev Module"). Não precisa de S3, PSRAM, microSD nem LoRa.
+* Cabos USB **de dados** e bons (um cabo ruim causou reinício por *brownout* nos testes).
+* Wi-Fi/Hotspot **2,4 GHz** com o canal **fixo** (veja "Canal" abaixo).
+* Python 3.8+ para o `ingress_handler.py`.
+* **PlatformIO** (VS Code) **ou** **Arduino IDE 2** (veja a seção do Arduino IDE).
 
 ---
 
-## 🚀 Como Executar o Projeto (Passo a Passo)
+## 🚀 Passo a passo (3 placas)
 
-### 1. Iniciar o Servidor Ingress no Computador
+**1. Servidor no computador**
+```bash
+python3 ingress_handler.py
+```
+Anote o IP do computador (`ipconfig` no Windows, `ip a` no Linux).
 
-O servidor precisa estar rodando para receber as requisições HTTP do ESP2 Gateway.
+**2. Fixe o canal do Hotspot em 2** (ou mude `ESPNOW_CHANNEL` nos três `ares_config.h` para o canal do Hotspot).
 
-1. Descubra o IP local do seu computador na mesma rede Wi-Fi que o ESP32 usará:
-   * **Linux**: `ip a` ou `hostname -I`
-   * **macOS**: `ipconfig getifaddr en0`
-   * **Windows**: `ipconfig`
-2. No diretório raiz do projeto, execute o script:
-   ```bash
-   python3 ingress_handler.py
-   ```
-   O terminal indicará:
-   ```text
-   --- ARES Ingress Handler Rodando em 0.0.0.0:8080 ---
-   Aguardando conexões HTTP POST do Gateway ESP2...
-   ```
+**3. ESP2 Gateway**: copie `ares-firmware-esp2/include/ares_credentials.h.example` para `ares_credentials.h`, preencha Wi-Fi e IP, grave e abra o Monitor Serial (115200). Esperado: `[WiFi] Conectado ... Canal: 2` sem `[AVISO]` de canal.
 
----
+**4. ESP3 Router**: grave sem configurar nada. Em até 5 s: `[NBR] Novo vizinho: ... (Gateway)` e `[ROUTE] Rota: 1 salto(s)`.
 
-### 2. Configurar e Gravar o ESP2 (Gateway)
+**5. ESP1 Storage**: grave sem configurar nada. No primeiro boot ele prepara a flash (alguns segundos). Depois: `[NBR] Novo vizinho`, `[ROUTE] Entregando para ...`, e a cada 30 s uma telemetria. Digite `p0 Socorro, 2 pessoas` para mandar uma mensagem urgente.
 
-O Gateway precisa das credenciais do seu Wi-Fi e do IP do seu computador (onde o `ingress_handler.py` está rodando).
+**6. Confira**: o JSON aparece no terminal do `ingress_handler.py`.
 
-1. Abra a pasta `ares-firmware-esp2/include/`.
-2. Se ainda não existir o arquivo `ares_credentials.h`, duplique o modelo:
-   ```bash
-   cp ares-firmware-esp2/include/ares_credentials.h.example ares-firmware-esp2/include/ares_credentials.h
-   ```
-3. Edite `ares_credentials.h` com os dados da sua rede e o IP da sua máquina:
-   ```c
-   #ifndef ARES_CREDENTIALS_H
-   #define ARES_CREDENTIALS_H
+Comandos úteis no Monitor Serial de qualquer ESP: `s` (status), `q` (mensagens guardadas), `log` (eventos, Storage/Gateway), `n` (vizinhos, Storage/Router).
 
-   #define WIFI_SSID "NOME_DO_SEU_WIFI"
-   #define WIFI_PASSWORD "SENHA_DO_SEU_WIFI"
-   #define INGRESS_SERVER_IP "192.168.1.X" // IP descoberto no passo 1
+### Testes que valem a pena fazer
+| Teste | Como | Esperado |
+|---|---|---|
+| Queda de energia | Desligue o Gateway, crie mensagens no Storage, desligue e religue o Storage | `[STORE] N mensagem(ns) recuperada(s) da flash` e todas chegam quando o Gateway volta |
+| Servidor fora | Pare o `ingress_handler.py` e crie `p1 fila` no Storage | Gateway: `[GATEWAY] Sem servidor`. Storage: `q` mostra a mensagem guardada nele. Ao religar o servidor, em até 30 s o Gateway volta a aceitar e tudo chega |
+| Prioridade | Com o Gateway desligado, crie `p4 a`, `p4 b`, `p0 c` | Ao religar, `c` chega primeiro |
+| Rota alternativa | Storage longe do Gateway, Router no meio | `[ROUTE] Entregando para ... (Router)` |
 
-   #endif
-   ```
-4. Conecte o ESP2 ao computador via USB.
-5. Compile e faça o upload:
-   * **Pelo VS Code**: Abra o projeto, clique no ícone do PlatformIO na barra lateral e selecione `ares-firmware-esp2` -> **Upload and Monitor**.
-   * **Pela CLI**:
-     ```bash
-     pio run -d ares-firmware-esp2 -t upload
-     pio device monitor -d ares-firmware-esp2 -b 115200
-     ```
-6. **Importante**: Observe no Monitor Serial a seguinte linha de saída:
-   ```text
-   --- DESCOBRINDO ENDEREÇO MAC ---
-   XX:XX:XX:XX:XX:XX
-   ```
-   **Anote esse MAC Address**, pois ele será usado na configuração do ESP1.
+### Resultado do teste em placas reais (05/11/2026)
+Storage + Gateway em ESP32 comuns, Hotspot de iPhone (2,4 GHz, canal 6), Arduino IDE 2:
+
+| Teste | Resultado |
+|---|---|
+| Gravar uma mensagem na flash | ~0,15 s |
+| `p0` no Storage até a custódia no Gateway | 0,58 s |
+| Storage → Gateway → Wi-Fi → servidor | JSON chegou, HTTP 200 |
+| Servidor desligado e religado | Nada se perdeu, nada duplicou, P1 chegou antes das P4 (versão em que o Gateway ainda guardava; a regra "fica no Storage" veio depois e falta testar) |
+
+Falta testar: Router (ESP3) em placa real, queda de energia com fila e flash quase cheia.
 
 ---
 
-### 3. Configurar e Gravar o ESP1 (Emissor)
+## 🧰 Usando o Arduino IDE
 
-O Emissor precisa saber o endereço MAC do ESP2 para enviar mensagens via ESP-NOW.
-
-1. Abra a pasta `ares-firmware-esp1/include/`.
-2. Se ainda não existir `ares_credentials.h`, duplique o modelo:
-   ```bash
-   cp ares-firmware-esp1/include/ares_credentials.h.example ares-firmware-esp1/include/ares_credentials.h
-   ```
-3. Edite `ares_credentials.h` inserindo os bytes do MAC Address obtido no ESP2:
-   ```c
-   #ifndef ARES_CREDENTIALS_H
-   #define ARES_CREDENTIALS_H
-
-   // Exemplo: se o MAC for C8:C9:A3:CB:BC:8C
-   #define GATEWAY_MAC {0xC8, 0xC9, 0xA3, 0xCB, 0xBC, 0x8C}
-
-   #endif
-   ```
-4. Conecte o ESP1 ao computador via USB.
-5. Compile e faça o upload:
-   * **Pelo VS Code**: Selecione `ares-firmware-esp1` -> **Upload and Monitor**.
-   * **Pela CLI**:
-     ```bash
-     pio run -d ares-firmware-esp1 -t upload
-     pio device monitor -d ares-firmware-esp1 -b 115200
-     ```
+O repositório é PlatformIO. Para o Arduino IDE, gere os sketches:
+```bash
+python tools/gerar_sketches_arduino.py
+```
+Abra `arduino-ide/ares_esp1_storage/ares_esp1_storage.ino` (idem para `ares_esp2_gateway` e `ares_esp3_router`).
+* Placa: **ESP32 Dev Module**. Partition Scheme: **Default 4MB with spiffs** (o Storage e o Gateway usam essa área para a flash).
+* ESP2: instale a biblioteca **ArduinoJson** (Ferramentas > Gerenciar Bibliotecas).
+* Placa que fica reiniciando com `partition table error` (a C8:C9:A3:CB:BC:8C fez isso): **Flash Mode DIO** e **Flash Frequency 40MHz**.
+* `Failed to connect to ESP32: No serial data received` na gravação: segure **BOOT**, aperte e solte **EN**, solte o BOOT e grave de novo (ou Upload Speed 115200). Se continuar mesmo com outro cabo e outra porta, o defeito é da placa: troque-a.
+* Duas janelas do `ingress_handler.py` abertas ao mesmo tempo dividem a porta 8080 no Windows e o JSON aparece na janela "errada". Feche todas (`taskkill /IM python.exe /F`) e abra uma só.
+* O código compila nos núcleos 2.x (PlatformIO) e 3.x (Arduino IDE atual): os callbacks do ESP-NOW que mudaram têm `#if` para os dois.
 
 ---
 
-## 🔍 Verificando o Funcionamento
+## 💡 Erros conhecidos (da wiki e dos testes) e o que o código faz
 
-Com os dois ESPs ligados e o script Python em execução:
+| Erro | Origem | Tratamento |
+|---|---|---|
+| HTTP dentro do callback do rádio derrubava a pilha TCP/IP | Post-mortem da POC | Callbacks só copiam para fila do FreeRTOS. O POST roda numa tarefa própria no Gateway. Nada de `Serial` no callback (o ESP2 antigo imprimia). |
+| Gateway guardava 1 pacote e perdia o resto durante o POST | Gateway da POC | Gateway guarda até 2.000 na flash, com ACK de custódia. O Router não precisa mais esperar 1,5 s. |
+| `POST -1` / `connection refused` | Post-mortem | Firewall do Windows na porta 8080 (`New-NetFirewallRule -DisplayName ARES -Direction Inbound -Protocol TCP -LocalPort 8080 -Action Allow`), rede como **Particular**, servidor em `0.0.0.0`. O Gateway tenta de novo sozinho. |
+| IP do notebook muda (DHCP do Hotspot) | Contingência | No Gateway: `ip 192.168.x.y` no Serial. Fica salvo, sem regravar. |
+| Hotspot troca de canal → nós param de se ouvir | Contingência | Fixe o canal. O Gateway avisa `[AVISO] O Hotspot está no canal X` a cada 10 s. |
+| Wi-Fi 5 GHz, WPA2-Enterprise, AP Isolation | Contingência | Não suportados pelo ESP32: use Hotspot 2,4 GHz, WPA2 normal, sem isolamento. |
+| `msg_id` repetia a cada reinício do ESP1 | Repositório | Storage usa `MAC curto + sequência` que nunca repete (contador de boots na NVS). |
+| `source_id` "ESP1-EMISSOR" (12 letras) era cortado | Repositório | `source_id` agora é `STG-A1B2C3` (10 letras). |
+| "Peer channel is not equal to the home channel" | Testes do Router | Peers com canal 0 (= canal atual do rádio). |
+| Reinício por brownout na USB | Testes do Router | Troque o cabo. Se precisar, `RADIO_LOW_TX_POWER true`. |
+| Mensagem de ~260 B não cabe no ESP-NOW v1 (250 B) | Wiki (Storage) | O `AresMessagePacket` tem 156 B. Um `static_assert` impede passar de 250. |
+| microSD / PSRAM / ESP32-S3 | Wiki | Não usados: flash interna com LittleFS; índice de 2.000 mensagens ocupa ~40 KB de RAM. |
 
-1. **No Monitor Serial do ESP1 (Emissor)**:
-   ```text
-   [LOOP] Pacote #1 despachado com sucesso via ESP-NOW.
-   [LOOP] Pacote #2 despachado com sucesso via ESP-NOW.
-   ```
-2. **No Monitor Serial do ESP2 (Gateway)**:
-   ```text
-   [ESP-NOW RX] Pacote recebido de MAC: ... | Tamanho: ... bytes
-   --- [ARES GATEWAY] Pacote Processado na Thread Principal ---
-   ...
-   [HTTP] POST enviado com sucesso! Código de resposta: 200
-   [HTTP] Resposta do Servidor: {"status":"success"}
-   ```
-3. **No Terminal do Python (`ingress_handler.py`)**:
-   ```text
-   [ARES INGRESS] Pacote recebido com sucesso do Gateway!
-   {
-       "msg_id": "msg-uuid-1",
-       "source_id": "ESP1-EMISSOR",
-       "priority": 4,
-       "battery_level": 98.5,
-       "lat": "-29.6842",
-       "lon": "-53.8069",
-       "text_message": "ARES #1"
-   }
-   ```
-
----
-
-## 🧪 Teste Isolado de Conectividade Wi-Fi/HTTP (`tests/`)
-
-Caso queira validar a conexão Wi-Fi e comunicação HTTP do ESP32 com o computador antes de testar o ESP-NOW:
-
-1. Inicie o servidor de teste:
-   ```bash
-   python3 tests/test_server.py
-   ```
-2. Configure `tests/test-server/include/ares_credentials.h` com seu SSID, senha e IP local.
-3. Grave o firmware de teste em um ESP32:
-   ```bash
-   pio run -d tests/test-server -t upload
-   ```
-4. O ESP32 enviará um JSON `{"teste":"ola_do_esp32"}` a cada 5 segundos na rota raiz do servidor.
-
----
-
-## 💡 Dicas e Soluções de Problemas
-
-* **Rede Wi-Fi 2.4 GHz**: Os módulos ESP32 padrão só operam em redes de 2.4 GHz. Certifique-se de que a rede Wi-Fi ou o Hotspot do celular esteja operando nessa frequência.
-* **Canal do ESP-NOW**: O protocolo ESP-NOW compartilha o canal de rádio com a interface Wi-Fi. Certifique-se de que ambos os dispositivos estejam no mesmo canal (o ESP2 sincroniza com o canal do AP conectado).
-* **Firewall do Computador**: Se o ESP2 se conectar ao Wi-Fi mas falhar no envio HTTP (`Falha no POST`), verifique se o firewall do sistema operacional (como `ufw`, `iptables` ou Windows Defender) não está bloqueando conexões de entrada na porta `8080`.
-* **Modo Debug no ESP1**: No arquivo `ares-firmware-esp1/include/ares_config.h`, a diretiva `FORCE_SOFTWARE_DEBUG true` ativa logs detalhados via serial. Alternativamente, colocar o pino `GPIO 4` em nível lógico alto (3.3V) ativa o debug físico.
+## ⚠️ Limitações que continuam
+* A fila do **Router** fica na RAM (24 mensagens): se ele reiniciar com mensagens, elas se perdem. Storage e Gateway não têm esse problema.
+* A flash do ESP32 aguenta ~100 mil gravações por bloco; o LittleFS distribui as gravações, e com telemetria a cada 30 s isso dá muitos anos. Não diminua muito o `TELEMETRY_INTERVAL_MS`.
+* O relógio do Storage/Gateway é o "tempo de vida" do nó (sem GNSS/internet): a validade de 7 dias conta o tempo **ligado**.
+* Enquanto o Gateway tenta reconectar no Wi-Fi, o rádio dele troca de canal e ele pode perder pacotes. Os nós reenviam porque não recebem o ACK.
+* Sem criptografia/autenticação das mensagens, sem LoRa e sem troca automática de papéis (fora do escopo por enquanto).

@@ -30,3 +30,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Sketches gerados para o Arduino IDE (python tools/gerar_sketches_arduino.py)
+arduino-ide/
