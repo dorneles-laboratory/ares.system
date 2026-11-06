@@ -16,6 +16,11 @@
 #include <stdint.h>
 #include "ares_protocol.h"
 
+// Handle especial: em vez de um POST, a tarefa só testa se o servidor atende (abre e fecha
+// uma conexão TCP). O loop() usa isso para saber quando o servidor voltou, mesmo sem
+// nenhuma mensagem na flash para enviar.
+#define UPLINK_PROBE_HANDLE (-2)
+
 typedef struct {
     int handle;                        // Gaveta da flash de onde veio (o loop() usa na volta)
     AresMessagePacket packet;

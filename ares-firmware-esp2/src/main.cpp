@@ -39,7 +39,9 @@ bool storageOk = false;
 // Mensagem que está com a tarefa de HTTP agora
 int uplinkHandle = STORE_NONE;
 AresMessagePacket uplinkPacket;
-uint32_t httpFailStreak = 0;           // Falhas seguidas (para a pausa crescer)
+// Falhas seguidas (para a pausa crescer). Começa em 1 = "servidor ainda não verificado":
+// o Gateway só passa a aceitar mensagens depois do primeiro POST ou teste que der certo.
+uint32_t httpFailStreak = 1;
 unsigned long nextUplinkAllowedAt = 0;
 
 unsigned long lastBeaconAt = 0;
@@ -53,6 +55,8 @@ bool lastWifiConnected = false;
 uint32_t receivedCount = 0;
 uint32_t duplicateCount = 0;
 uint32_t refusedCount = 0;
+uint32_t offlineRefusedCount = 0;      // Recusadas porque o servidor estava fora (ficaram no vizinho)
+bool lastAccepting = false;
 uint32_t postedCount = 0;
 uint32_t postFailCount = 0;
 uint32_t expiredCount = 0;
@@ -71,6 +75,17 @@ static uint8_t currentChannel() {
     wifi_second_chan_t second;
     esp_wifi_get_channel(&channel, &second);
     return channel;
+}
+
+// O Gateway consegue entregar ao servidor agora? (Wi-Fi conectado e o último POST/teste deu certo)
+static bool serverReachable() {
+    return WiFi.status() == WL_CONNECTED && httpFailStreak == 0;
+}
+
+// Aceita custódia de mensagens novas? Com GATEWAY_HOLD_WHEN_OFFLINE, só quando há servidor:
+// assim, sem rede, as mensagens ficam guardadas no Storage (decisão do grupo).
+static bool acceptingCustody() {
+    return !GATEWAY_HOLD_WHEN_OFFLINE || serverReachable();
 }
 
 // ============================================================================
@@ -106,6 +121,14 @@ void handleDataPacket(AresMessagePacket *packet, const uint8_t *senderMac) {
         duplicateCount++;
         if (GATEWAY_DEBUG) Serial.println("[DUP] Já entregue ao servidor. ACK reenviado.");
         sendCustodyAck(senderMac, header);
+        return;
+    }
+
+    // Sem servidor: recusa SEM ACK. O Storage/Router continua com a mensagem (na flash dele)
+    // e só manda de novo quando o beacon do Gateway voltar a anunciar rota.
+    if (!acceptingCustody()) {
+        offlineRefusedCount++;
+        if (GATEWAY_DEBUG) Serial.println("[GATEWAY] Sem servidor agora. Recusada sem ACK: fica guardada no vizinho.");
         return;
     }
 
@@ -172,9 +195,21 @@ void processUplink() {
     // a) Chegou o resultado de um POST?
     UplinkResult result;
     if (uplinkPollResult(&result) && result.handle == uplinkHandle) {
+        bool isProbe = (uplinkHandle == UPLINK_PROBE_HANDLE);
         if (result.httpCode >= 200 && result.httpCode < 300) {
-            postedCount++;
             httpFailStreak = 0;
+        }
+        if (isProbe) {
+            // Foi só o teste "o servidor está de pé?": não há mensagem para apagar nem adiar
+            if (httpFailStreak != 0 || result.httpCode < 200 || result.httpCode >= 300) {
+                httpFailStreak++;
+                uint32_t pause = HTTP_RETRY_MIN_MS;
+                for (uint32_t i = 1; i < httpFailStreak && pause < HTTP_RETRY_MAX_MS; i++) pause *= 2;
+                if (pause > HTTP_RETRY_MAX_MS) pause = HTTP_RETRY_MAX_MS;
+                nextUplinkAllowedAt = now + pause;
+            }
+        } else if (result.httpCode >= 200 && result.httpCode < 300) {
+            postedCount++;
             dedupRemember(&uplinkPacket.header);
             eventLog("ENTREGUE_SERVIDOR", &uplinkPacket.header, nullptr);
             flashStoreRemove(uplinkHandle);
@@ -202,7 +237,17 @@ void processUplink() {
     if ((int32_t) (now - nextUplinkAllowedAt) < 0) return;
 
     int handle = flashStoreNext(now);
-    if (handle == STORE_NONE) return;
+    if (handle == STORE_NONE) {
+        // Nada para enviar, mas o servidor estava fora (ou ainda não foi testado):
+        // faz só o teste de conexão para descobrir se ele voltou.
+        if (httpFailStreak > 0) {
+            static UplinkJob probeJob;
+            memset(&probeJob, 0, sizeof(probeJob));
+            probeJob.handle = UPLINK_PROBE_HANDLE;
+            if (uplinkSubmit(&probeJob)) uplinkHandle = UPLINK_PROBE_HANDLE;
+        }
+        return;
+    }
 
     static UplinkJob job;
     if (!flashStoreRead(handle, &job.packet, job.fromMac)) {
@@ -232,10 +277,17 @@ void sendBeacon() {
     beacon.header.version = ARES_CTRL_VERSION;
     beacon.header.type = CTRL_BEACON;
     beacon.role = ROLE_GATEWAY;
-    beacon.hopsToGateway = 0;          // Eu SOU o Gateway
     beacon.batteryPct = BATTERY_UNKNOWN;
-    int freeSlots = flashStoreFree();
-    beacon.queueFree = (uint8_t) (freeSlots > 255 ? 255 : freeSlots);
+    if (acceptingCustody()) {
+        beacon.hopsToGateway = 0;      // Eu SOU o Gateway e o servidor está alcançável
+        int freeSlots = flashStoreFree();
+        beacon.queueFree = (uint8_t) (freeSlots > 255 ? 255 : freeSlots);
+    } else {
+        // Sem servidor: "sem rota" e "sem vagas". Storage e Router param de me mandar
+        // mensagens e guardam com eles até eu voltar a anunciar 0 saltos.
+        beacon.hopsToGateway = HOPS_UNREACHABLE;
+        beacon.queueFree = 0;
+    }
     beacon.sequence = ++beaconSequence;
     broadcastFrame(&beacon, sizeof(beacon));
 }
@@ -330,6 +382,9 @@ void printStatus() {
                   flashStoreUsed(), STORE_CAPACITY, (unsigned) ESP.getFreeHeap());
     Serial.printf("Recebidas: %lu | Duplicadas: %lu | Recusadas: %lu | Expiradas: %lu\n", (unsigned long) receivedCount,
                   (unsigned long) duplicateCount, (unsigned long) refusedCount, (unsigned long) expiredCount);
+    Serial.printf("Aceitando mensagens novas: %s\n", acceptingCustody() ? "SIM"
+                  : (WiFi.status() != WL_CONNECTED ? "NÃO (sem Wi-Fi: ficam no Storage)" : "NÃO (servidor fora: ficam no Storage)"));
+    Serial.printf("Recusadas sem servidor (ficaram no vizinho): %lu\n", (unsigned long) offlineRefusedCount);
     Serial.printf("POST ok: %lu | POST com falha: %lu | Rádio: fila cheia=%lu, desconhecidos=%lu\n",
                   (unsigned long) postedCount, (unsigned long) postFailCount, (unsigned long) getDroppedFrames(),
                   (unsigned long) (getIgnoredFrames() + unknownFrames));
@@ -354,7 +409,7 @@ void runCommand(char *line) {
         prefs.begin("ares", false);
         prefs.putString("server_ip", line + 3);
         prefs.end();
-        httpFailStreak = 0;
+        httpFailStreak = 1;            // IP novo: precisa testar de novo antes de aceitar mensagens
         nextUplinkAllowedAt = 0;
         Serial.printf("[HTTP] Servidor agora é http://%s:%d/ (salvo na NVS)\n", line + 3, INGRESS_SERVER_PORT);
     } else if (strcmp(line, "format sim") == 0) {
@@ -440,6 +495,21 @@ void loop() {
     if (now - lastHousekeepingAt >= 1000) {
         lastHousekeepingAt = now;
         nodeClockMaybeSave();
+    }
+    // Mudou entre "aceitando" e "sem servidor"? Avisa e manda o beacon na hora,
+    // sem esperar os 5 s, para Storage e Router saberem logo.
+    bool accepting = acceptingCustody();
+    if (accepting != lastAccepting) {
+        lastAccepting = accepting;
+        if (accepting) {
+            Serial.println("[GATEWAY] Servidor alcançável. Aceitando mensagens de novo.");
+            eventLog("SERVIDOR", nullptr, "alcançável: aceitando mensagens");
+        } else {
+            Serial.println("[GATEWAY] Sem servidor. Novas mensagens ficam guardadas no Storage/Router.");
+            eventLog("SERVIDOR", nullptr, "fora: mensagens ficam no Storage");
+        }
+        lastBeaconAt = now;
+        sendBeacon();
     }
     if (now - lastBeaconAt >= BEACON_INTERVAL_MS) {
         lastBeaconAt = now;
