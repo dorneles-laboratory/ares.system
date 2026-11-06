@@ -2,6 +2,8 @@
 
 Recebe as mensagens pelo rádio (do Router ou direto do Storage), **grava na flash**, confirma a custódia e envia cada uma ao `ingress_handler.py` por HTTP POST. Só apaga quando o servidor responde 200.
 
+**Sem servidor, as mensagens ficam no Storage.** Quando o Wi-Fi cai ou o servidor não responde, o Gateway anuncia "sem rota" no beacon e recusa mensagens novas sem ACK, então o Storage (e o Router) continuam com elas. A cada 2 a 30 s ele testa o servidor (só abre uma conexão TCP); quando responde, volta a aceitar e avisa na hora com um beacon. O que já estava na flash do Gateway continua lá e é enviado normalmente. No `s` aparece "Aceitando mensagens novas: SIM/NÃO". Para o comportamento antigo (Gateway guarda tudo), use `GATEWAY_HOLD_WHEN_OFFLINE false`.
+
 ## Em 30 segundos
 1. `cp include/ares_credentials.h.example include/ares_credentials.h` e preencha Wi-Fi (2,4 GHz) e o IP do computador.
 2. Fixe o canal do Hotspot em **2** (o mesmo `ESPNOW_CHANNEL` do Storage e do Router).

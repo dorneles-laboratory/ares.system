@@ -101,6 +101,19 @@ static int postJob(const UplinkJob *job) {
     return code;
 }
 
+// Teste "o servidor está de pé?": só abre e fecha uma conexão TCP na porta do Ingress.
+// Devolve 200 se atendeu (mesmo significado de sucesso que o POST) ou -1 se não.
+static int probeServer() {
+    char ip[40];
+    uplinkGetServerIp(ip, sizeof(ip));
+    WiFiClient client;
+    bool ok = client.connect(ip, INGRESS_SERVER_PORT, SERVER_PROBE_TIMEOUT_MS);
+    client.stop();
+    if (GATEWAY_DEBUG) Serial.printf("[HTTP] Teste do servidor %s:%d -> %s\n", ip, INGRESS_SERVER_PORT,
+                                     ok ? "respondeu" : "sem resposta");
+    return ok ? 200 : -1;
+}
+
 // Sem Wi-Fi: tenta de novo de tempos em tempos (o Hotspot pode ter reiniciado).
 // Cuidado: enquanto procura a rede, o rádio passa por todos os canais e o ESP-NOW
 // fica surdo. Por isso, se não conectar, o rádio é devolvido ao canal do ESP-NOW.
@@ -133,7 +146,13 @@ static void uplinkTask(void *arg) {
         if (xQueueReceive(jobQueue, &job, pdMS_TO_TICKS(200)) == pdTRUE) {
             UplinkResult result;
             result.handle = job.handle;
-            result.httpCode = (WiFi.status() == WL_CONNECTED) ? postJob(&job) : -100;
+            if (WiFi.status() != WL_CONNECTED) {
+                result.httpCode = -100;
+            } else if (job.handle == UPLINK_PROBE_HANDLE) {
+                result.httpCode = probeServer();
+            } else {
+                result.httpCode = postJob(&job);
+            }
             xQueueSend(resultQueue, &result, portMAX_DELAY);
             busy = false;
         }

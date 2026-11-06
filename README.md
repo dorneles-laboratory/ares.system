@@ -18,7 +18,7 @@ Rede de mensagens de emergência com ESP32 comuns: as mensagens viajam por rádi
 |---|---|---|---|
 | ESP1 | **Storage**: cria mensagens (telemetria e texto pelo Serial), aceita mensagens de outros nós e as guarda até entregar | [`ares-firmware-esp1/`](ares-firmware-esp1/README.md) | Até 2.000 mensagens na **flash interna** (LittleFS), sobrevive a queda de energia |
 | ESP3 | **Router**: descobre vizinhos, calcula a rota até o Gateway e repassa | [`ares-firmware-esp3/`](ares-firmware-esp3/README.md) | Fila de 24 mensagens na RAM |
-| ESP2 | **Gateway**: recebe pelo rádio e envia ao servidor por HTTP | [`ares-firmware-esp2/`](ares-firmware-esp2/README.md) | Até 2.000 mensagens na **flash interna** enquanto o servidor/Wi-Fi está fora |
+| ESP2 | **Gateway**: recebe pelo rádio e envia ao servidor por HTTP | [`ares-firmware-esp2/`](ares-firmware-esp2/README.md) | Até 2.000 mensagens na **flash interna**, só enquanto tenta o POST. Sem servidor, não aceita novas |
 
 O Storage também entrega **direto** ao Gateway quando o ouve; o Router só é necessário para aumentar o alcance. Vários Routers formam uma rede de vários saltos.
 
@@ -29,6 +29,7 @@ O Storage também entrega **direto** ao Gateway quando o ouve; o Router só é n
 3. Quem recebe **grava primeiro** e só depois manda o **ACK de custódia**. Só então o Storage apaga a dele.
 4. Sem ACK: tenta 3 vezes, espera 3 s e tenta de novo (a rota pode ter mudado).
 5. O Gateway envia ao servidor por HTTP. Só apaga quando o servidor responde 200.
+6. **Sem servidor (Wi-Fi caiu ou servidor fora do ar), o Gateway para de aceitar mensagens novas**: o beacon dele passa a dizer "sem rota" e as mensagens **ficam guardadas no Storage** (e no Router) até a rede voltar. Para mudar isso: `GATEWAY_HOLD_WHEN_OFFLINE` no `ares_config.h` do ESP2.
 
 ### Três confirmações diferentes (a wiki pede para não confundir)
 
@@ -93,7 +94,7 @@ Comandos úteis no Monitor Serial de qualquer ESP: `s` (status), `q` (mensagens 
 | Teste | Como | Esperado |
 |---|---|---|
 | Queda de energia | Desligue o Gateway, crie mensagens no Storage, desligue e religue o Storage | `[STORE] N mensagem(ns) recuperada(s) da flash` e todas chegam quando o Gateway volta |
-| Servidor fora | Pare o `ingress_handler.py` | Gateway: `[HTTP] Falha no POST` com pausas crescentes; nada se perde. Ao religar, tudo chega |
+| Servidor fora | Pare o `ingress_handler.py` e crie `p1 fila` no Storage | Gateway: `[GATEWAY] Sem servidor`. Storage: `q` mostra a mensagem guardada nele. Ao religar o servidor, em até 30 s o Gateway volta a aceitar e tudo chega |
 | Prioridade | Com o Gateway desligado, crie `p4 a`, `p4 b`, `p0 c` | Ao religar, `c` chega primeiro |
 | Rota alternativa | Storage longe do Gateway, Router no meio | `[ROUTE] Entregando para ... (Router)` |
 
@@ -105,7 +106,7 @@ Storage + Gateway em ESP32 comuns, Hotspot de iPhone (2,4 GHz, canal 6), Arduino
 | Gravar uma mensagem na flash | ~0,15 s |
 | `p0` no Storage até a custódia no Gateway | 0,58 s |
 | Storage → Gateway → Wi-Fi → servidor | JSON chegou, HTTP 200 |
-| Servidor desligado e religado | Nada se perdeu, nada duplicou, P1 chegou antes das P4 |
+| Servidor desligado e religado | Nada se perdeu, nada duplicou, P1 chegou antes das P4 (versão em que o Gateway ainda guardava; a regra "fica no Storage" veio depois e falta testar) |
 
 Falta testar: Router (ESP3) em placa real, queda de energia com fila e flash quase cheia.
 

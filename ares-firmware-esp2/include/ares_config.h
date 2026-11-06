@@ -59,6 +59,15 @@
 #define WIFI_RETRY_INTERVAL_MS 30000   // Sem Wi-Fi: tenta conectar de novo a cada 30 s
 #define WIFI_CONNECT_TIMEOUT_MS 20000  // Tempo máximo esperando o Wi-Fi no boot
 
+// --- SEM SERVIDOR: QUEM GUARDA AS MENSAGENS? ---
+// true  = o Gateway só aceita mensagens novas quando consegue falar com o servidor.
+//         Sem Wi-Fi ou com o servidor fora do ar, ele anuncia "sem rota" no beacon e
+//         recusa sem ACK: as mensagens FICAM NO STORAGE (e no Router) até a rede voltar.
+//         O que já estava na flash do Gateway continua lá e é enviado quando voltar.
+// false = o Gateway aceita e guarda tudo na flash dele mesmo sem servidor.
+#define GATEWAY_HOLD_WHEN_OFFLINE true
+#define SERVER_PROBE_TIMEOUT_MS 2000   // Teste rápido "o servidor está de pé?" (só abre a conexão TCP)
+
 // --- COMANDOS PELO SERIAL ---
 #define SERIAL_LINE_IDLE_MS 100
 
