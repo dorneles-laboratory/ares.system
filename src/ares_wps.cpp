@@ -242,11 +242,12 @@ void AresLocationManager::begin() {
         Serial.printf("[AresLocationManager] Localização prévia restaurada da Flash NVS: Lat %s, Lon %s (Precisão: %.1fm)\n",
                       g_ares_lat, g_ares_lon, _currentLocation.accuracy);
     } else {
-        // Fallback para coordenadas padrão de contingência
-        snprintf(g_ares_lat, sizeof(g_ares_lat), "%s", NODE_LAT);
-        snprintf(g_ares_lon, sizeof(g_ares_lon), "%s", NODE_LON);
-        Serial.printf("[AresLocationManager] Nenhuma posição NVS encontrada. Usando contingência inicial: Lat %s, Lon %s\n",
-                      g_ares_lat, g_ares_lon);
+        // Nenhuma posição NVS: define estritamente como INDEFINIDO
+        _currentLocation.valid = false;
+        strncpy(g_ares_lat, "INDEFINIDO", sizeof(g_ares_lat) - 1);
+        strncpy(g_ares_lon, "INDEFINIDO", sizeof(g_ares_lon) - 1);
+        strncpy(g_ares_altura, "INDEFINIDO", sizeof(g_ares_altura) - 1);
+        Serial.println("[AresLocationManager] Nenhuma posição NVS encontrada. Posição geográfica: INDEFINIDO.");
     }
 
     _initialized = true;
@@ -271,7 +272,7 @@ void AresLocationManager::saveToNvs(const GeoLocation& loc) {
 
 bool AresLocationManager::loadFromNvs(GeoLocation& loc) {
     Preferences prefs;
-    if (!prefs.begin("ares_geo", true)) {
+    if (!prefs.begin("ares_geo", false)) {
         return false;
     }
 

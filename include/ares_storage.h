@@ -34,6 +34,14 @@ public:
     // Retorna número de pacotes em custódia ativa
     int getStoredCount() const { return count; }
 
+    // Retorna espaço livre real da partição Flash LittleFS em KB
+    uint32_t getAvailableSpaceKb() const {
+        if (!_fsMounted) return 0;
+        size_t total = LittleFS.totalBytes();
+        size_t used = LittleFS.usedBytes();
+        return (total > used) ? (uint32_t)((total - used) / 1024) : 0;
+    }
+
     const AresMessagePacket* getPacketAt(int index) const;
     void removePacketAt(int index);
     void clearAll();

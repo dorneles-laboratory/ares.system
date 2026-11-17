@@ -15,13 +15,13 @@ typedef enum {
 } AresPriorityLevel;
 
 // Papéis operacionais dos nós ARES
-typedef enum {
-    ARES_ROLE_GATEWAY    = 1, // Gateway: Ingress conectado à Base IP / Nuvem
-    ARES_ROLE_ROUTER     = 2, // Router: Entrada com Captive Portal SOS
-    ARES_ROLE_RELAY      = 3, // Relay: Repetidor e retransmissão ad-hoc
-    ARES_ROLE_STORAGE    = 4, // Storage: Store-and-Forward persistente DTN
-    ARES_ROLE_DRONE_MULE = 5  // Drone Mule: FANET móvel para drenagem aérea oportunística
-} AresNodeRole;
+#define ARES_ROLE_GATEWAY    1 // Gateway: Ingress conectado à Base IP / Nuvem
+#define ARES_ROLE_ROUTER     2 // Router: Entrada com Captive Portal SOS
+#define ARES_ROLE_RELAY      3 // Relay: Repetidor e retransmissão ad-hoc
+#define ARES_ROLE_STORAGE    4 // Storage: Store-and-Forward persistente DTN
+#define ARES_ROLE_DRONE_MULE 5 // Drone Mule: FANET móvel para drenagem aérea oportunística
+
+typedef uint8_t AresNodeRole;
 
 #define ARES_ROLE_EDGE_SOS   ARES_ROLE_ROUTER
 #define ARES_ROLE_EDGE_FIELD ARES_ROLE_ROUTER
@@ -32,13 +32,36 @@ typedef enum {
     ARES_DIR_DOWNSTREAM = 2  // Da Base para o campo
 } AresMessageDirection;
 
-// Tipos de mensagem e controle DTN
+// Tipos de mensagem e controle DTN + Plano de Controle Interno RF
 typedef enum {
-    ARES_MSG_DATA            = 1, // Dados normais / Alertas SOS / Telemetria
-    ARES_MSG_CUSTODY_ACK     = 2, // Confirmação de custódia DTN (ACK de entrega)
-    ARES_MSG_BULK_DRAIN_REQ  = 3, // Solicitação do Drone FANET para esvaziamento em rajada
-    ARES_MSG_BULK_DRAIN_DONE = 4  // Finalização da rajada de drenagem
+    ARES_MSG_DATA              = 1, // Dados normais / Alertas SOS / Telemetria P0..P4
+    ARES_MSG_CUSTODY_ACK       = 2, // Confirmação de custódia DTN (ACK de entrega)
+    ARES_MSG_BULK_DRAIN_REQ    = 3, // Solicitação do Drone FANET para esvaziamento em rajada
+    ARES_MSG_BULK_DRAIN_DONE   = 4, // Finalização da rajada de drenagem
+    ARES_MSG_CONTROL_TELEMETRY = 5, // [Plano de Controle RF] Telemetria assinada e sincronismo de hora
+    ARES_MSG_CONTROL_CMD       = 6, // [Plano de Controle RF] Ordem assinada de troca de função (propagada via RF)
+    ARES_MSG_CONTROL_ACK       = 7  // [Plano de Controle RF] Confirmação de execução do comando pelo nó remoto
 } AresMessageType;
+
+inline const char* aresRoleToString(uint8_t role) {
+    switch (role) {
+        case ARES_ROLE_GATEWAY:    return "GATEWAY";
+        case ARES_ROLE_ROUTER:     return "ROUTER";
+        case ARES_ROLE_RELAY:      return "RELAY";
+        case ARES_ROLE_STORAGE:    return "STORAGE";
+        case ARES_ROLE_DRONE_MULE: return "MULE";
+        default:                   return "RELAY";
+    }
+}
+
+inline uint8_t aresStringToRole(const char* roleStr) {
+    if (!roleStr) return ARES_ROLE_RELAY;
+    if (strcasecmp(roleStr, "GATEWAY") == 0 || strcmp(roleStr, "1") == 0) return ARES_ROLE_GATEWAY;
+    if (strcasecmp(roleStr, "ROUTER") == 0 || strcasecmp(roleStr, "EDGE") == 0 || strcmp(roleStr, "2") == 0) return ARES_ROLE_ROUTER;
+    if (strcasecmp(roleStr, "STORAGE") == 0 || strcmp(roleStr, "4") == 0) return ARES_ROLE_STORAGE;
+    if (strcasecmp(roleStr, "MULE") == 0 || strcmp(roleStr, "5") == 0) return ARES_ROLE_DRONE_MULE;
+    return ARES_ROLE_RELAY;
+}
 
 // Flags de status de nó e protocolo
 #define ARES_FLAG_ENERGY_LOW     0x01 // Bateria < 20% (EAR: recusa tráfego P3/P4)

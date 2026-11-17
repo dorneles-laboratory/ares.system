@@ -2,7 +2,7 @@
 
 AresRadio* AresRadio::instance = nullptr;
 
-AresRadio::AresRadio() : packetCallback(nullptr), lastRssi(-60), seenIndex(0) {
+AresRadio::AresRadio() : packetCallback(nullptr), lastRssi(0), seenIndex(0) {
     memset(seenMsgIds, 0, sizeof(seenMsgIds));
 }
 
@@ -14,6 +14,10 @@ AresRadio& AresRadio::getInstance() {
 }
 
 bool AresRadio::begin(uint8_t channel) {
+    if (WiFi.getMode() == WIFI_MODE_NULL) {
+        WiFi.mode(WIFI_STA);
+    }
+
     // Inicializa ESP-NOW
     if (esp_now_init() != ESP_OK) {
         Serial.println("[ARES RADIO] Erro ao inicializar ESP-NOW!");
@@ -23,11 +27,11 @@ bool AresRadio::begin(uint8_t channel) {
     esp_now_register_send_cb(AresRadio::onDataSent);
     esp_now_register_recv_cb(AresRadio::onDataRecv);
 
-    // Adiciona peer de broadcast padrão
+    // Adiciona peer de broadcast padrão com canal 0 (segue o canal do rádio automaticamente)
     esp_now_peer_info_t peerInfo = {};
     uint8_t broadcastMac[] = BROADCAST_MAC;
     memcpy(peerInfo.peer_addr, broadcastMac, 6);
-    peerInfo.channel = channel;
+    peerInfo.channel = 0; // Canal 0 = Home Channel atual do rádio (evita erro 12390)
     peerInfo.encrypt = false;
 
     if (!esp_now_is_peer_exist(broadcastMac)) {

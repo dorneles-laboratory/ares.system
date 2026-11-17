@@ -95,9 +95,9 @@ void AresCaptivePortal::handleSend() {
     packet.header.hop_count = 1;
     packet.header.timestamp = millis();
 
-    packet.telemetry.battery_level = 94.0f;
-    packet.telemetry.storage_avail_kb = 1420;
-    packet.telemetry.last_rssi = -55;
+    packet.telemetry.battery_level = g_ares_battery;
+    packet.telemetry.storage_avail_kb = AresStorage::getInstance().getAvailableSpaceKb();
+    packet.telemetry.last_rssi = AresRadio::getInstance().getLastRssi();
 
     strncpy(packet.location.lat, ARES_NODE_LAT, sizeof(packet.location.lat));
     strncpy(packet.location.lon, ARES_NODE_LON, sizeof(packet.location.lon));
@@ -105,7 +105,7 @@ void AresCaptivePortal::handleSend() {
 
     strncpy(packet.payload.text_message, text, sizeof(packet.payload.text_message));
 
-    packet.hops_trail[0] = NODE_ROLE;
+    packet.hops_trail[0] = g_ares_role;
 
     // 1. Armazena localmente em custódia DTN
     AresStorage::getInstance().storePacket(&packet);
