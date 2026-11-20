@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <Preferences.h>
 #include <esp_mac.h>
+#include <esp_wifi.h> // [CORRECAO CANAL]
 #include <mbedtls/md.h>
 #include <soc/soc.h>
 #include <soc/rtc_cntl_reg.h>
@@ -87,11 +88,12 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs) {
     Serial.flush();
 
     // Ajusta frequência de CPU conforme papel (após esvaziar buffer UART para não corromper caracteres)
-    if (g_ares_role == ARES_ROLE_RELAY || g_ares_role == ARES_ROLE_STORAGE) {
-        setCpuFrequencyMhz(80);
-    } else {
-        setCpuFrequencyMhz(160);
-    }
+    // [CORRECAO USB] CPU na frequencia padrao
+    // if (g_ares_role == ARES_ROLE_RELAY || g_ares_role == ARES_ROLE_STORAGE) {
+    //     setCpuFrequencyMhz(80);
+    // } else {
+    //     setCpuFrequencyMhz(160);
+    // }
 
     // Se saiu de GATEWAY, encerra conexões de Gateway
     if (prevRole == ARES_ROLE_GATEWAY && g_ares_role != ARES_ROLE_GATEWAY) {
@@ -101,15 +103,16 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs) {
     // Ativa os serviços do novo papel com potência TX moderada para evitar queda de tensão (Brownout) no USB
     if (g_ares_role == ARES_ROLE_GATEWAY) {
         AresGateway::getInstance().begin();
-        WiFi.setTxPower(WIFI_POWER_15dBm);
+        WiFi.setTxPower(WIFI_POWER_8_5dBm); // [CORRECAO USB]
         AresRadio::getInstance().begin(ARES_ESP_NOW_CHANNEL);
     } else if (g_ares_role == ARES_ROLE_ROUTER) {
         AresCaptivePortal::getInstance().begin(g_ares_ssid);
-        WiFi.setTxPower(WIFI_POWER_15dBm);
+        WiFi.setTxPower(WIFI_POWER_8_5dBm); // [CORRECAO USB]
         AresRadio::getInstance().begin(ARES_ESP_NOW_CHANNEL);
     } else {
         WiFi.mode(WIFI_STA);
-        WiFi.setTxPower(WIFI_POWER_15dBm);
+        WiFi.setTxPower(WIFI_POWER_8_5dBm); // [CORRECAO USB]
+        esp_wifi_set_channel(ARES_ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE); // [CORRECAO CANAL] Relay/Storage no mesmo canal do Gateway
         AresRadio::getInstance().begin(ARES_ESP_NOW_CHANNEL);
     }
 }
@@ -342,7 +345,7 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
 
 void setup() {
     // Desativa o detector de Brownout hipersensível para evitar reset por pico de corrente de RF no cabo USB
-    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // [CORRECAO USB] brownout desligado de novo, como no original
 
     Serial.begin(115200);
     delay(800);

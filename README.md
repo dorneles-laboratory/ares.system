@@ -2,6 +2,9 @@
 
 Este módulo contém o firmware unificado para a bancada de **6 nós ESP32**, compondo o ecossistema completo de comunicação tolerante a atrasos e desconexões (**DTN / FANET**) do projeto **ARES** (*Adaptive Resilient Emergency System*).
 
+
+> ✅ **Teste de bancada em hardware real (20/11/2026):** fluxo celular → ROUTER → malha ESP-NOW → GATEWAY → servidor funcionando. Veja [docs/TESTE-BANCADA-2026-11-20.md](docs/TESTE-BANCADA-2026-11-20.md) para resultados, correções aplicadas e o passo a passo atualizado.
+
 ---
 
 ## 🏗️ Topologia da Bancada Física (Os 6 Nós)

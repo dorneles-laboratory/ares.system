@@ -71,7 +71,7 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs);
 // ==============================================================================
 // CONFIGURAÇÕES DE RÁDIO ESP-NOW E WI-FI
 // ==============================================================================
-#define ARES_ESP_NOW_CHANNEL 1
+#define ARES_ESP_NOW_CHANNEL 11 // [CORRECAO CANAL] era 1: precisa ser o mesmo canal do hotspot ARES_BASE_WIFI (11 no teste)
 #define FORCE_SOFTWARE_DEBUG true
 #define BROADCAST_MAC {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 
