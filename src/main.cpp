@@ -130,6 +130,7 @@ void sendCustodyAck(const char* targetMsgId, const char* targetNodeId) {
     ack.header.ttl = 16;
     ack.header.timestamp = (uint32_t)time(nullptr);
     strncpy(ack.payload.text_message, targetMsgId, sizeof(ack.payload.text_message) - 1);
+    ack.hops_trail[0] = g_ares_role; // [PORTAL] quem confirmou (GATEWAY = chegou na base, STORAGE = guardado na rede)
 
     AresRadio::getInstance().sendBroadcast(&ack);
     Serial.printf("[%s] [DTN CUSTODY] ACK de custódia emitido para pacote %s\n", ARES_NODE_ID, targetMsgId);
@@ -180,6 +181,11 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
         Serial.printf("[%s] 📥 [DTN CUSTODY ACK] Confirmação recebida de %s para pacote %s (RSSI: %d dBm)\n",
                       ARES_NODE_ID, packet->header.source_id, packet->payload.text_message, rssi);
         AresStorage::getInstance().confirmCustody(packet->payload.text_message);
+        if (g_ares_role == ARES_ROLE_ROUTER) {
+            // [PORTAL] Avisa o portal do celular que o pedido foi confirmado
+            AresCaptivePortal::getInstance().onCustodyAck(packet->payload.text_message,
+                                                          packet->hops_trail[0] == ARES_ROLE_GATEWAY);
+        }
         return;
     }
 
