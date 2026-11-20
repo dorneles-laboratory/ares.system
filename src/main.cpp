@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <Preferences.h>
 #include <esp_mac.h>
+#include <esp_wifi.h> // [CORRECAO CANAL]
 #include <mbedtls/md.h>
 #include <soc/soc.h>
 #include <soc/rtc_cntl_reg.h>
@@ -87,11 +88,12 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs) {
     Serial.flush();
 
     // Ajusta frequência de CPU conforme papel (após esvaziar buffer UART para não corromper caracteres)
-    if (g_ares_role == ARES_ROLE_RELAY || g_ares_role == ARES_ROLE_STORAGE) {
-        setCpuFrequencyMhz(80);
-    } else {
-        setCpuFrequencyMhz(160);
-    }
+    // [CORRECAO USB] CPU na frequencia padrao
+    // if (g_ares_role == ARES_ROLE_RELAY || g_ares_role == ARES_ROLE_STORAGE) {
+    //     setCpuFrequencyMhz(80);
+    // } else {
+    //     setCpuFrequencyMhz(160);
+    // }
 
     // Se saiu de GATEWAY, encerra conexões de Gateway
     if (prevRole == ARES_ROLE_GATEWAY && g_ares_role != ARES_ROLE_GATEWAY) {
@@ -101,15 +103,16 @@ void switchNodeRole(uint8_t newRole, bool persistToNvs) {
     // Ativa os serviços do novo papel com potência TX moderada para evitar queda de tensão (Brownout) no USB
     if (g_ares_role == ARES_ROLE_GATEWAY) {
         AresGateway::getInstance().begin();
-        WiFi.setTxPower(WIFI_POWER_15dBm);
+        WiFi.setTxPower(WIFI_POWER_8_5dBm); // [CORRECAO USB]
         AresRadio::getInstance().begin(ARES_ESP_NOW_CHANNEL);
     } else if (g_ares_role == ARES_ROLE_ROUTER) {
         AresCaptivePortal::getInstance().begin(g_ares_ssid);
-        WiFi.setTxPower(WIFI_POWER_15dBm);
+        WiFi.setTxPower(WIFI_POWER_8_5dBm); // [CORRECAO USB]
         AresRadio::getInstance().begin(ARES_ESP_NOW_CHANNEL);
     } else {
         WiFi.mode(WIFI_STA);
-        WiFi.setTxPower(WIFI_POWER_15dBm);
+        WiFi.setTxPower(WIFI_POWER_8_5dBm); // [CORRECAO USB]
+        esp_wifi_set_channel(ARES_ESP_NOW_CHANNEL, WIFI_SECOND_CHAN_NONE); // [CORRECAO CANAL] Relay/Storage no mesmo canal do Gateway
         AresRadio::getInstance().begin(ARES_ESP_NOW_CHANNEL);
     }
 }
@@ -127,6 +130,7 @@ void sendCustodyAck(const char* targetMsgId, const char* targetNodeId) {
     ack.header.ttl = 16;
     ack.header.timestamp = (uint32_t)time(nullptr);
     strncpy(ack.payload.text_message, targetMsgId, sizeof(ack.payload.text_message) - 1);
+    ack.hops_trail[0] = g_ares_role; // [PORTAL] quem confirmou (GATEWAY = chegou na base, STORAGE = guardado na rede)
 
     AresRadio::getInstance().sendBroadcast(&ack);
     Serial.printf("[%s] [DTN CUSTODY] ACK de custódia emitido para pacote %s\n", ARES_NODE_ID, targetMsgId);
@@ -177,6 +181,11 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
         Serial.printf("[%s] 📥 [DTN CUSTODY ACK] Confirmação recebida de %s para pacote %s (RSSI: %d dBm)\n",
                       ARES_NODE_ID, packet->header.source_id, packet->payload.text_message, rssi);
         AresStorage::getInstance().confirmCustody(packet->payload.text_message);
+        if (g_ares_role == ARES_ROLE_ROUTER) {
+            // [PORTAL] Avisa o portal do celular que o pedido foi confirmado
+            AresCaptivePortal::getInstance().onCustodyAck(packet->payload.text_message,
+                                                          packet->hops_trail[0] == ARES_ROLE_GATEWAY);
+        }
         return;
     }
 
@@ -342,7 +351,7 @@ void onPacketReceived(const uint8_t *senderMac, const AresMessagePacket *packet,
 
 void setup() {
     // Desativa o detector de Brownout hipersensível para evitar reset por pico de corrente de RF no cabo USB
-    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+    WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // [CORRECAO USB] brownout desligado de novo, como no original
 
     Serial.begin(115200);
     delay(800);

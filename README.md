@@ -2,6 +2,9 @@
 
 Este módulo contém o firmware unificado para a bancada de **6 nós ESP32**, compondo o ecossistema completo de comunicação tolerante a atrasos e desconexões (**DTN / FANET**) do projeto **ARES** (*Adaptive Resilient Emergency System*).
 
+
+> ✅ **Teste de bancada em hardware real (20/11/2026):** fluxo celular → ROUTER → malha ESP-NOW → GATEWAY → servidor funcionando. Veja [docs/TESTE-BANCADA-2026-11-20.md](docs/TESTE-BANCADA-2026-11-20.md) para resultados, correções aplicadas e o passo a passo atualizado.
+
 ---
 
 ## 🏗️ Topologia da Bancada Física (Os 6 Nós)
@@ -42,34 +45,22 @@ Este módulo contém o firmware unificado para a bancada de **6 nós ESP32**, co
 
 ---
 
-## ⚡ Como Gravar os 6 ESP32s (PlatformIO)
+## ⚡ Como Gravar os ESP32s (PlatformIO)
 
-Conecte a placa desejada na porta USB do computador e execute o comando correspondente:
+> ⚠️ **Atualizado no teste de 20/11/2026.** Os ambientes `esp1_edge_sos`, `esp6_gateway` etc. e a pasta
+> `firmware/ares-mesh-node` não existem mais. O `platformio.ini` (na raiz) tem um só ambiente, `ares_node`:
+> **todas as placas recebem o mesmo firmware** e o papel é escolhido depois, pelo monitor serial.
+> O que mudou e por quê: [docs/MUDANCAS-2026-11-20.md](docs/MUDANCAS-2026-11-20.md).
 
 ```bash
-# Gravar Nó 1 (Borda A - SOS)
-pio run -d firmware/ares-mesh-node -e esp1_edge_sos -t upload
+# 1. Gravar (repetir para cada placa; com várias no USB use --upload-port COMx)
+pio run -t upload
 
-# Gravar Nó 2 (Relay Norte)
-pio run -d firmware/ares-mesh-node -e esp2_relay_north -t upload
-
-# Gravar Nó 3 (Storage DTN)
-pio run -d firmware/ares-mesh-node -e esp3_relay_storage -t upload
-
-# Gravar Nó 4 (FANET Drone Mule)
-pio run -d firmware/ares-mesh-node -e esp4_drone_mule -t upload
-
-# Gravar Nó 5 (Borda B - Equipe de Campo)
-pio run -d firmware/ares-mesh-node -e esp5_edge_field -t upload
-
-# Gravar Nó 6 (Gateway Ingress Base)
-pio run -d firmware/ares-mesh-node -e esp6_gateway -t upload
+# 2. Escolher o papel (fica salvo na placa). No Windows, use o terminal PowerShell.
+pio device monitor -b 115200 --echo --filter send_on_enter
+#   role 1 = GATEWAY | role 2 = ROUTER | role 3 = RELAY (padrão) | role 4 = STORAGE
+#   s      = mostra o estado da placa (papel, Wi-Fi, canal)
 ```
-
-> **Dica de Monitor Serial:**
-> ```bash
-> pio device monitor -b 115200
-> ```
 
 ---
 
